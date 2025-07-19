@@ -1,6 +1,6 @@
 extends CharacterBody2D
 
-enum GrappleState { IDLE, SHOOTING, ATTACHED }
+enum GrappleState { IDLE, SHOOTING, ATTACHED, BASHING }
 
 # Nodes
 @onready var animation_player: AnimationPlayer = $AnimationPlayer
@@ -8,14 +8,16 @@ enum GrappleState { IDLE, SHOOTING, ATTACHED }
 @onready var rope_line: Line2D = $Line2D
 @onready var sprite: Sprite2D = $Sprite2D
 
+# Death vars
+@export var respawn_position: Vector2
+@export var death_bounds := Rect2(Vector2.ZERO, Vector2(720, 480))
+
 # Player movement vars
 @export var speed := 200
 @export var jump_velocity := -450
 @export var gravity := 1300
-
-# Death vars
-@export var respawn_position: Vector2
-@export var death_bounds := Rect2(Vector2.ZERO, Vector2(720, 480))
+var air_control := 100.0
+var counter_air_control := 2000.0
 
 # Grapple mechanics vars
 var grapple_state = GrappleState.IDLE
@@ -26,6 +28,13 @@ var swing_velocity := 0.0
 var swing_angle := 0.0
 var swing_frame = 42
 var angular_drag = 0.995
+
+# Bash vars
+var bash_speed := 1200.0
+var bash_direction := Vector2.ZERO
+var bash_duration := 0.15
+var bash_timer := 0.0
+var bash_start_position := Vector2.ZERO
 
 # Coyote time and jump buffering 
 var coyote_time := 0.1
@@ -64,8 +73,7 @@ func _physics_process(delta):
 				animation_player.play("idle")
 
 		else:
-			var air_control := 100.0
-			var counter_air_control := 2000.0
+			# input in the direction of movement needs to be much weaker than the opposite
 			if direction != 0:
 				if sign(direction) == sign(velocity.x):
 					velocity.x += direction * air_control * delta
@@ -81,6 +89,25 @@ func _physics_process(delta):
 	# Grapple movement
 	if grapple_state == GrappleState.ATTACHED:
 		handle_grapple_movement(delta)
+	
+	# Bash mechanic
+	elif grapple_state == GrappleState.BASHING:
+		bash_timer -= delta
+		var motion = bash_direction * bash_speed * delta
+		var collision = move_and_collide(motion)
+
+		if collision:
+			var normal = collision.get_normal()
+			# Reflect the direction and reduce speed 
+			bash_direction = bash_direction.bounce(normal).normalized()
+			velocity = bash_direction * bash_speed * 0.5
+			grapple_state = GrappleState.IDLE
+		else:
+			# No collision, continue moving
+			global_position += motion
+			if bash_timer <= 0.0:
+				velocity = bash_direction * bash_speed
+				grapple_state = GrappleState.IDLE
 	else:
 		move_and_slide()
 
@@ -90,8 +117,11 @@ func _physics_process(delta):
 
 
 func _input(event):
-	if event.is_action_pressed("grapple") and grapple_state == GrappleState.IDLE:
-		fire_grapple()
+	if event.is_action_pressed("grapple"):
+		if grapple_state == GrappleState.IDLE:
+			fire_grapple()
+		elif grapple_state == GrappleState.ATTACHED:
+			bash()
 
 	if event.is_action_pressed("jump"):
 		jump_buffer_timer = jump_buffer_time
@@ -172,7 +202,7 @@ func handle_grapple_movement(delta):
 	var collision = move_and_collide(move_vector)
 
 	if collision:
-		var bounce = move_vector.bounce(collision.get_normal()) * 0.5  # slight bounce back
+		var bounce = move_vector.bounce(collision.get_normal()) * 0.5 
 		var tentative_pos = global_position + bounce
 
 		# Reproject to correct rope length
@@ -184,3 +214,9 @@ func handle_grapple_movement(delta):
 		swing_velocity *= -0.5
 	else:
 		velocity = move_vector / delta
+
+func bash():
+	grapple_state = GrappleState.BASHING
+	bash_start_position = global_position
+	bash_direction = (grapple_target - global_position).normalized()
+	bash_timer = bash_duration
